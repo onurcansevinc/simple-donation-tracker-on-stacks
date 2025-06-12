@@ -1,0 +1,14 @@
+{
+    "name": "donation-tracker-contracts",
+    "version": "1.0.0",
+    "description": "Smart contracts for the Simple Donation Tracker on Stacks",
+    "scripts": {
+        "test": "clarinet test"
+    },
+    "dependencies": {
+        "@stacks/clarinet-sdk": "^1.0.0"
+    },
+    "devDependencies": {
+        "typescript": "^4.5.4"
+    }
+}
