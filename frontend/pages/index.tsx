@@ -1,7 +1,8 @@
+import { toast } from 'react-hot-toast';
+import { showConnect } from '@stacks/connect';
+import { StacksTestnet } from '@stacks/network';
 import React, { useState, useEffect } from 'react';
-import { connect } from '@stacks/connect';
-import { STACKS_TESTNET } from '@stacks/network';
-import { fetchCallReadOnlyFunction, cvToValue, uintCV, makeSTXTokenTransfer, broadcastTransaction, ClarityValue, ListCV } from '@stacks/transactions';
+import { cvToValue, uintCV, makeSTXTokenTransfer, broadcastTransaction, ClarityValue, ListCV, callReadOnlyFunction } from '@stacks/transactions';
 
 interface Donation {
     id: number;
@@ -48,6 +49,7 @@ const Home: React.FC = () => {
         lastDonation: null,
         topDonor: null,
     });
+    const [pendingDonations, setPendingDonations] = useState<Set<string>>(new Set());
 
     const contractAddress = 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM';
     const contractName = 'donation-tracker';
@@ -65,21 +67,21 @@ const Home: React.FC = () => {
         }
 
         try {
-            const { isSignedIn, userData } = await connect({
+            showConnect({
                 appDetails: {
                     name: 'Simple Donation Tracker',
                     icon: 'https://example.com/icon.png',
                 },
-                network: STACKS_TESTNET,
+                onFinish: (data) => {
+                    setIsSignedIn(true);
+                    setUserData(data);
+                },
+                onCancel: () => {
+                    toast.error('Cüzdan bağlantısı kullanıcı tarafından iptal edildi.');
+                },
             });
-            setIsSignedIn(isSignedIn);
-            setUserData(userData);
         } catch (error: any) {
-            if (error.message && error.message.includes('User canceled')) {
-                alert('Cüzdan bağlantısı kullanıcı tarafından iptal edildi.');
-            } else {
-                alert('Bir hata oluştu: ' + (error.message || error));
-            }
+            toast.error('Bir hata oluştu: ' + (error.message || error));
             console.error('Error connecting wallet:', error);
         }
     };
@@ -131,8 +133,8 @@ const Home: React.FC = () => {
         }
 
         try {
-            const donationIds = await fetchCallReadOnlyFunction({
-                network: STACKS_TESTNET,
+            const donationIds = await callReadOnlyFunction({
+                network: new StacksTestnet(),
                 contractAddress,
                 contractName,
                 functionName: 'get-all-donations',
@@ -141,9 +143,9 @@ const Home: React.FC = () => {
             });
 
             const donationList = await Promise.all(
-                (donationIds as ListCV<ClarityValue>).value.map(async (id: ClarityValue) => {
-                    const donation = await fetchCallReadOnlyFunction({
-                        network: STACKS_TESTNET,
+                (donationIds as ListCV<ClarityValue>).list.map(async (id: ClarityValue) => {
+                    const donation = await callReadOnlyFunction({
+                        network: new StacksTestnet(),
                         contractAddress,
                         contractName,
                         functionName: 'get-donation',
@@ -170,6 +172,60 @@ const Home: React.FC = () => {
         }
     }, [isSignedIn]);
 
+    useEffect(() => {
+        if (!isSignedIn) return;
+
+        const checkDonationStatus = async () => {
+            try {
+                const donationIds = await callReadOnlyFunction({
+                    network: new StacksTestnet(),
+                    contractAddress,
+                    contractName,
+                    functionName: 'get-all-donations',
+                    functionArgs: [],
+                    senderAddress: userData?.address || '',
+                });
+
+                const donationList = await Promise.all(
+                    (donationIds as ListCV<ClarityValue>).list.map(async (id: ClarityValue) => {
+                        const donation = await callReadOnlyFunction({
+                            network: new StacksTestnet(),
+                            contractAddress,
+                            contractName,
+                            functionName: 'get-donation',
+                            functionArgs: [uintCV(Number(cvToValue(id)))],
+                            senderAddress: userData?.address || '',
+                        });
+                        return {
+                            id: Number(cvToValue(id)),
+                            ...cvToValue(donation),
+                        };
+                    })
+                );
+
+                // Check for confirmed donations
+                donationList.forEach((donation) => {
+                    if (pendingDonations.has(donation.id.toString())) {
+                        toast.success(`Bağışınız onaylandı! ${donation.amount} STX`);
+                        setPendingDonations((prev) => {
+                            const next = new Set(prev);
+                            next.delete(donation.id.toString());
+                            return next;
+                        });
+                    }
+                });
+
+                setDonations(donationList);
+                calculateStatistics(donationList);
+            } catch (error) {
+                console.error('Error checking donation status:', error);
+            }
+        };
+
+        const interval = setInterval(checkDonationStatus, 10000); // Check every 10 seconds
+        return () => clearInterval(interval);
+    }, [isSignedIn, pendingDonations]);
+
     const handleDonate = async () => {
         if (!donationAmount || isNaN(Number(donationAmount))) return;
 
@@ -186,7 +242,7 @@ const Home: React.FC = () => {
                 setDonations(updatedDonations);
                 calculateStatistics(updatedDonations);
                 setDonationAmount('');
-                alert('Test bağışı başarıyla eklendi!');
+                toast.success('Test bağışı başarıyla eklendi!');
                 return;
             }
 
@@ -197,21 +253,27 @@ const Home: React.FC = () => {
                 recipient: contractAddress,
                 amount: amount,
                 senderKey: userData?.privateKey,
-                network: STACKS_TESTNET,
+                network: new StacksTestnet(),
+                anchorMode: 3,
             });
 
             // Broadcast transaction
-            const result = await broadcastTransaction({ transaction });
+            const result = await broadcastTransaction(transaction);
             console.log('Transaction result:', result);
+
+            // Add to pending donations
+            const newDonationId = donations.length + 1;
+            setPendingDonations((prev) => new Set([...Array.from(prev), newDonationId.toString()]));
+            toast.success(`${donationAmount} STX bağışınız işleme alındı. Onay bekleniyor...`);
 
             // Refresh donations list
             await fetchDonations();
             setDonationAmount('');
         } catch (error: any) {
             if (error.message && error.message.includes('User canceled')) {
-                alert('İşlem kullanıcı tarafından iptal edildi.');
+                toast.error('İşlem kullanıcı tarafından iptal edildi.');
             } else {
-                alert('Bir hata oluştu: ' + (error.message || error));
+                toast.error('Bir hata oluştu: ' + (error.message || error));
             }
             console.error('Error making donation:', error);
         } finally {
