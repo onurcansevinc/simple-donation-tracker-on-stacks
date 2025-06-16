@@ -51,12 +51,15 @@
     (ok (var-get total-donations))
 )
 
-;; Get all donations (returns a list of donation IDs)
-(define-read-only (get-all-donations)
-    (ok (map-keys donations))
+;; Get donation by ID
+(define-read-only (get-donation-by-id (id uint))
+    (let ((donation (map-get? donations id)))
+        (asserts! (is-some donation) ERR_DONATION_NOT_FOUND)
+        (ok (unwrap! donation ERR_DONATION_NOT_FOUND))
+    )
 )
 
 ;; Get total amount of donations
 (define-read-only (get-total-amount)
-    (ok (fold (map-values donations) u0 (lambda (acc donation) (+ acc (get amount donation)))))
+    (ok (var-get total-donations))
 ) 
